@@ -40,7 +40,7 @@ def grabcut(img, rect, n_iter=5):
     # Return the final mask and the GMMs
     return mask, bgGMM, fgGMM
 
-
+# check commits in file
 def initalize_GMMs(img, mask):
     # TODO: implement initalize_GMMs
     bgGMM = None
