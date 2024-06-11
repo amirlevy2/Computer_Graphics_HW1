@@ -1,6 +1,9 @@
+import maxflow
 import numpy as np
 import cv2
 import argparse
+import sklearn
+from sklearn.mixture import GaussianMixture
 
 GC_BGD = 0  # Hard bg pixel
 GC_FGD = 1  # Hard fg pixel, will not be used
@@ -15,7 +18,7 @@ def grabcut(img, rect, n_iter=5):
     mask.fill(GC_BGD)
     x, y, w, h = rect
 
-    # Convert from absolute cordinates
+    # Convert from absolute coordinates
     w -= x
     h -= y
 
@@ -28,6 +31,7 @@ def grabcut(img, rect, n_iter=5):
     num_iters = 1000
     for i in range(num_iters):
         #Update GMM
+        print("iter {}".format(i))
         bgGMM, fgGMM = update_GMMs(img, mask, bgGMM, fgGMM)
 
         mincut_sets, energy = calculate_mincut(img, mask, bgGMM, fgGMM)
@@ -41,20 +45,33 @@ def grabcut(img, rect, n_iter=5):
     return mask, bgGMM, fgGMM
 
 
-# question 2.1 - Aviv
+# question 2.1 - Amir - Should be OK
 def initalize_GMMs(img, mask):
-    # TODO: implement initalize_GMMs
-    bgGMM = None
-    fgGMM = None
+    # TODO: implement initialize_GMMs
+    bg_pixels = img[mask == GC_BGD]
+    fg_pr_pixels = img[mask == GC_PR_FGD]
+
+    bgGMM = GaussianMixture(n_components=5)
+    fgGMM = GaussianMixture(n_components=5)
+
+    bgGMM.fit(bg_pixels)
+    fgGMM.fit(fg_pr_pixels)
 
     return bgGMM, fgGMM
 
 
 # Define helper functions for the GrabCut algorithm
-# question 2.2 - Amir
+# question 2.2 - Amir - Should be OK
 def update_GMMs(img, mask, bgGMM, fgGMM):
     # TODO: implement GMM component assignment step
+    bg_pixels = img[mask == GC_BGD]
+    fg_pr_pixels = img[mask == GC_PR_FGD]
+
+    bgGMM.fit(bg_pixels)
+    fgGMM.fit(fg_pr_pixels)
+
     return bgGMM, fgGMM
+
 
 # question 2.3 - Amir
 def calculate_mincut(img, mask, bgGMM, fgGMM):
@@ -63,16 +80,19 @@ def calculate_mincut(img, mask, bgGMM, fgGMM):
     energy = 0
     return min_cut, energy
 
+
+
 # question 2.4 - Aviv
 def update_mask(mincut_sets, mask):
     # TODO: implement mask update step
     return mask
 
-# question 2.5 - Amir
+
+# question 2.5 - Amir - Done
 def check_convergence(energy):
-    # TODO: implement convergence check
-    convergence = False
-    return convergence
+    threshold = 1
+    return energy < threshold
+
 
 # question 2.6 - Aviv
 def cal_metric(predicted_mask, gt_mask):
