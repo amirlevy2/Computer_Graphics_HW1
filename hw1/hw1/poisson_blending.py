@@ -7,10 +7,80 @@ import argparse
 
 
 def poisson_blend(im_src, im_tgt, im_mask, center):
-    # TODO: Implement Poisson blending of the source image onto the target ROI
+    # Dimensions of the source and target images
+    h_src, w_src = im_src.shape[:2]
+    h_tgt, w_tgt = im_tgt.shape[:2]
 
-    im_blend = im_tgt
-    return im_blend
+    # Offsets for placing the source image at the center in the target image
+    x_offset = center[1] - h_src // 2
+    y_offset = center[0] - w_src // 2
+
+    # ROI in the target image where the source image will be blended
+    tgt_roi = im_tgt[x_offset:x_offset + h_src, y_offset:y_offset + w_src]
+
+    # Prepare the Laplacian operator
+    laplacian_kernel = np.array([[0, -1, 0],
+                                 [-1, 4, -1],
+                                 [0, -1, 0]])
+
+    # Calculate gradients of the source image
+    gradient_x = cv2.filter2D(im_src, -1, np.array([[1, -1]]))
+    gradient_y = cv2.filter2D(im_src, -1, np.array([[1], [-1]]))
+
+    # Calculate the divergence of gradients
+    div_grad = cv2.filter2D(gradient_x, -1, np.array([[1], [-1]])) + \
+               cv2.filter2D(gradient_y, -1, np.array([[1, -1]]))
+
+    # Create the sparse matrix for the Laplacian operator
+    num_pixels = h_src * w_src
+    laplacian = scipy.sparse.lil_matrix((num_pixels, num_pixels))
+
+    # Fill the Laplacian matrix
+    for y in range(h_src):
+        for x in range(w_src):
+            idx = x + y * w_src
+            if im_mask[y, x] > 0:
+                laplacian[idx, idx] = 4
+                if x > 0:
+                    laplacian[idx, idx - 1] = -1
+                if x < w_src - 1:
+                    laplacian[idx, idx + 1] = -1
+                if y > 0:
+                    laplacian[idx, idx - w_src] = -1
+                if y < h_src - 1:
+                    laplacian[idx, idx + w_src] = -1
+
+    # Convert the Laplacian matrix to CSC format
+    laplacian = laplacian.tocsc()
+
+    # Solve the Poisson equation for each color channel
+    blended_channels = []
+    for channel in range(3):
+        tgt_channel = tgt_roi[:, :, channel].flatten()
+        src_channel = im_src[:, :, channel].flatten()
+        div_channel = div_grad[:, :, channel].flatten()
+
+        # Setup the system of linear equations
+        b = div_channel
+        for y in range(h_src):
+            for x in range(w_src):
+                if im_mask[y, x] == 0:
+                    idx = x + y * w_src
+                    b[idx] = tgt_channel[idx]
+
+        x = spsolve(laplacian, b)
+
+        # Reshape the solution to the source image shape
+        blended_channel = np.clip(x, 0, 255).reshape(h_src, w_src).astype(np.uint8)
+        blended_channels.append(blended_channel)
+
+    # Merge the color channels back into an image
+    im_blend = cv2.merge(blended_channels)
+
+    # Place the blended region back into the target image
+    im_tgt[x_offset:x_offset + h_src, y_offset:y_offset + w_src] = im_blend
+
+    return im_tgt
 
 
 def parse():
