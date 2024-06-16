@@ -32,7 +32,7 @@ def grabcut(img, rect, n_iter=5):
     bgGMM, fgGMM = initalize_GMMs(img, mask)
     beta = get_beta(img)
 
-    num_iters = 15
+    num_iters = 6
     for i in range(num_iters):
         #Update GMM
         print("iter {}".format(i))
@@ -81,7 +81,7 @@ def update_GMMs(img, mask, bgGMM, fgGMM):
 
     return bgGMM, fgGMM
 
-
+# Helper function to get beta (smoothness)
 def get_beta(img):
     rows, cols, _ = img.shape
     _left_diff = img[:, 1:] - img[:, :-1]
@@ -96,7 +96,7 @@ def get_beta(img):
     return beta
 
 
-# question 2.3 - Amir
+# question 2.3 - Amir - May need changes
 def calculate_mincut(img, mask, bgGMM, fgGMM):
     # TODO: implement energy (cost) calculation step and mincut
     min_cut = [[], []]
@@ -184,7 +184,7 @@ def check_convergence(energy):
     return energy < threshold
 
 
-# question 2.6 - Aviv
+# question 2.6 - Amir - Done
 def cal_metric(predicted_mask, gt_mask):
     intersection = np.logical_and(predicted_mask, gt_mask)
     union = np.logical_or(predicted_mask, gt_mask)
@@ -195,7 +195,7 @@ def cal_metric(predicted_mask, gt_mask):
 
 def parse():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--input_name', type=str, default='banana1', help='name of image from the course files')
+    parser.add_argument('--input_name', type=str, default='teddy', help='name of image from the course files')
     parser.add_argument('--eval', type=int, default=1, help='calculate the metrics')
     parser.add_argument('--input_img_path', type=str, default='', help='if you wish to use your own img_path')
     parser.add_argument('--use_file_rect', type=int, default=1, help='Read rect from course files')
