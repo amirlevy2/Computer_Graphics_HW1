@@ -58,9 +58,9 @@ def poisson_blend(im_src, im_tgt, im_mask, center):
 
 def parse():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--src_path', type=str, default='C:/Users/Aviv/Downloads/Tau/graphics/hw1/hw1/data/imgs/banana2.jpg', help='image file path')
-    parser.add_argument('--mask_path', type=str, default='C:/Users/Aviv/Downloads/Tau/graphics/hw1/hw1/data/seg_GT/banana1.bmp', help='mask file path')
-    parser.add_argument('--tgt_path', type=str, default='C:/Users/Aviv/Downloads/Tau/graphics/hw1/hw1/data/bg/table.jpg', help='target image file path')
+    parser.add_argument('--src_path', type=str, default='./data/imgs/banana2.jpg', help='image file path')
+    parser.add_argument('--mask_path', type=str, default='./data/seg_GT/banana1.bmp', help='mask file path')
+    parser.add_argument('--tgt_path', type=str, default='./data/bg/table.jpg', help='mask file path')
     return parser.parse_args()
 
 if __name__ == "__main__":
