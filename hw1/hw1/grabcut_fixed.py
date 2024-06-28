@@ -5,8 +5,7 @@ import igraph as ig
 import sklearn
 from sklearn.mixture import GaussianMixture
 import matplotlib.pyplot as plt
-
-
+import time
 
 GC_BGD = 0  # Hard bg pixel
 GC_FGD = 1  # Hard fg pixel, will not be used
@@ -14,7 +13,8 @@ GC_PR_BGD = 2  # Soft bg pixel
 GC_PR_FGD = 3  # Soft fg pixel
 neighbors = [(1, 0), (-1, 0), (0, 1), (0, -1), (-1, 1), (-1, -1), (1, -1), (1, 1)]
 beta = 0
-gamma, lamda = 20, 5 * 9
+gamma, lamda = 15, 5 * 9
+
 
 # Utility function to visualize data
 def visualize_data(data, title):
@@ -27,13 +27,42 @@ def visualize_data(data, title):
     plt.colorbar()
     plt.show()
 
+
+def getNeighborsEdges(img):
+    def vid(i, j):  # vertex ID
+        return (img.shape[1] * i) + j
+
+    def compute_V(i, j, oi, oj):
+        diff = img[i, j] - img[oi, oj]
+        return gamma * np.exp(- beta * diff.dot(diff))
+
+    def add_neighbors(row, col, E, W):
+        for k, l in neighbors:
+            o_i = row + k
+            o_j = col + l
+            if 0 <= o_i < img.shape[0] and 0 <= o_j < img.shape[1]:
+                E.append((vid(i, j), vid(o_i, o_j)))
+                W.append(compute_V(i, j, o_i, o_j))
+
+    edges = []
+    weights = []
+
+    for i in range(img.shape[0]):
+        for j in range(img.shape[1]):
+            # add edges to neighbours
+            add_neighbors(i, j, edges, weights)
+    return edges, weights
+
+
 # Define the GrabCut algorithm function
 def grabcut(img, rect, n_iter=5):
     # Assign initial labels to the pixels based on the bounding box
+    start_time = time.perf_counter()
+
     mask = np.zeros(img.shape[:2], dtype=np.uint8)
     mask.fill(GC_BGD)
     x, y, w, h = rect
-    
+    k = 0
 
     # Convert from absolute coordinates
     w -= x
@@ -45,29 +74,47 @@ def grabcut(img, rect, n_iter=5):
 
     bgGMM, fgGMM = initalize_GMMs(img, mask)
     beta = get_beta(img)
+    size_of_fg = img[mask == GC_PR_FGD].reshape((-1, img.shape[-1])).shape[0]
+    num_iters = 15
+    n_e, n_w = getNeighborsEdges(img)
 
-    num_iters = 5
     for i in range(num_iters):
         #Update GMM
+        start_time_iter = time.perf_counter()
+
         print("iter {}".format(i))
+
         bgGMM, fgGMM = update_GMMs(img, mask, bgGMM, fgGMM)
 
-        mincut_sets, energy = calculate_mincut(img, mask, bgGMM, fgGMM)
+        mincut_sets, energy = calculate_mincut(img, mask, bgGMM, fgGMM, n_e, n_w)
 
         # Visualize the likelihoods or energy maps (example)
-        fg_likelihoods = fgGMM.score_samples(img.reshape((-1, 3))).reshape(img.shape[:2])
-        bg_likelihoods = bgGMM.score_samples(img.reshape((-1, 3))).reshape(img.shape[:2])
-        visualize_data(fg_likelihoods, f'Foreground Likelihoods at Iteration {i}')
-        visualize_data(bg_likelihoods, f'Background Likelihoods at Iteration {i}')
+        #fg_likelihoods = fgGMM.score_samples(img.reshape((-1, 3))).reshape(img.shape[:2])
+        #bg_likelihoods = bgGMM.score_samples(img.reshape((-1, 3))).reshape(img.shape[:2])
+        #visualize_data(fg_likelihoods, f'Foreground Likelihoods at Iteration {i}')
+        #visualize_data(bg_likelihoods, f'Background Likelihoods at Iteration {i}')
 
         mask = update_mask(mincut_sets, mask)
 
+        temp_size = img[mask == GC_PR_FGD].reshape((-1, img.shape[-1])).shape[0]
+
         visualize_mask(mask, i)
 
-        if check_convergence(energy):
-            break
+        if check_convergence(abs(temp_size - size_of_fg)):
+            if k > 2:
+                break
+            k += 1
+
+        size_of_fg = temp_size
+        end_time_iter = time.perf_counter()
+        elapsed_time_iter = end_time_iter - start_time_iter
+        print(f"Elapsed time: {elapsed_time_iter} seconds")
 
     # Return the final mask and the GMMs
+    end_time = time.perf_counter()
+    elapsed_time = end_time - start_time
+    print(f"Elapsed time: {elapsed_time / 60} minutes")
+
     return mask, bgGMM, fgGMM
 
 
@@ -93,12 +140,11 @@ def initalize_GMMs(img, mask, n_components=5):
     return bgGMM, fgGMM
 
 
-
 # Define helper functions for the GrabCut algorithm
 # question 2.2 - Amir - Should be OK
 def update_GMMs(img, mask, bgGMM, fgGMM):
     bg_pixels = img[mask == GC_BGD].reshape((-1, img.shape[-1]))
-    fg_pr_pixels = img[mask == GC_PR_FGD].reshape((-1, img.shape[-1]))
+    fg_pr_pixels = img[(mask == GC_PR_FGD) | (mask == GC_FGD)].reshape((-1, img.shape[-1]))
 
     print(img[mask == GC_BGD].reshape((-1, img.shape[-1])).shape,
           img[mask == GC_PR_BGD].reshape((-1, img.shape[-1])).shape)
@@ -142,10 +188,6 @@ def update_GMMs(img, mask, bgGMM, fgGMM):
 ##    return beta
 
 
-
-
-
-
 # Helper function to get beta (smoothness)
 def get_beta(img):
     rows, cols, _ = img.shape
@@ -163,33 +205,23 @@ def get_beta(img):
 
 
 # question 2.3 - Amir - May need changes
-def calculate_mincut(img, mask, bgGMM, fgGMM):
+def calculate_mincut(img, mask, bgGMM, fgGMM, n_edges, n_weights):
     # TODO: implement energy (cost) calculation step and mincut
     min_cut = [[], []]
 
     fg_D = - fgGMM.score_samples(img.reshape((-1, img.shape[-1]))).reshape(img.shape[:-1])
     bg_D = - bgGMM.score_samples(img.reshape((-1, img.shape[-1]))).reshape(img.shape[:-1])
 
-
     # closure function to calculate boundary energy
     def compute_V(i, j, oi, oj):
         diff = img[i, j] - img[oi, oj]
         return gamma * np.exp(- beta * diff.dot(diff))
 
-    def add_neighbors(row, col, E, W):
-        for k, l in neighbors:
-            o_i = row + k
-            o_j = col + l
-            if 0 <= o_i < img.shape[0] and 0 <= o_j < img.shape[1]:
-                E.append((vid(i, j), vid(o_i, o_j)))
-                W.append(compute_V(i, j, o_i, o_j))
-
-    # BUILD GRAPH
-    num_pix = img.shape[0] * img.shape[1]
-
     def vid(i, j):  # vertex ID
         return (img.shape[1] * i) + j
 
+    # BUILD GRAPH
+    num_pix = img.shape[0] * img.shape[1]
     graph = ig.Graph(directed=False)
     graph.add_vertices(num_pix + 2)
     S = num_pix
@@ -203,7 +235,10 @@ def calculate_mincut(img, mask, bgGMM, fgGMM):
         for j in range(img.shape[1]):
             if mask[i, j] == GC_BGD:
                 edges.append((vid(i, j), T))
-                weights.append(lamda)
+                weights.append(np.inf)
+            elif mask[i, j] == GC_FGD:
+                edges.append((vid(i, j), S))
+                weights.append(np.inf)
             else:
                 edges.append((vid(i, j), S))
                 weights.append(bg_D[i, j])
@@ -211,8 +246,8 @@ def calculate_mincut(img, mask, bgGMM, fgGMM):
                 edges.append((vid(i, j), T))
                 weights.append(fg_D[i, j])
 
-            # add edges to neighbours
-            add_neighbors(i, j, edges, weights)
+    edges.extend(n_edges)
+    weights.extend(n_weights)
 
     graph.add_edges(edges, attributes={'weight': weights})
 
@@ -239,15 +274,18 @@ def update_mask(mincut_sets, mask):
 
     for v in fg_vertices:
         if v not in (num_pix, num_pix + 1):
-            new_mask[ind(v)] = GC_PR_FGD
+            if mask[ind(v)] == GC_FGD:
+                new_mask[ind(v)] = GC_FGD
+            else:
+                new_mask[ind(v)] = GC_PR_FGD
 
     return new_mask
 
 
 # question 2.5 - Amir - Done
 def check_convergence(energy):
-    threshold = 1
-    return energy < threshold
+    print(energy)
+    return energy < 25
 
 
 # question 2.6 - Amir - Done
@@ -258,6 +296,7 @@ def cal_metric(predicted_mask, gt_mask):
     accuracy = np.sum(predicted_mask == gt_mask) / gt_mask.size
     return accuracy, jaccard
 
+
 def visualize_mask(mask, iteration):
     plt.figure(figsize=(10, 5))
     plt.title(f'Mask State at Iteration {iteration}')
@@ -265,7 +304,7 @@ def visualize_mask(mask, iteration):
     plt.colorbar()
     plt.show()
 
-    
+
 def parse():
     parser = argparse.ArgumentParser()
     parser.add_argument('--input_name', type=str, default='stone2', help='name of image from the course files')
@@ -310,5 +349,3 @@ if __name__ == '__main__':
     cv2.imshow('GrabCut Result', img_cut)
     cv2.waitKey(0)
     cv2.destroyAllWindows()
-
-
