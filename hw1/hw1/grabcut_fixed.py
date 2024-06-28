@@ -13,7 +13,7 @@ GC_PR_BGD = 2  # Soft bg pixel
 GC_PR_FGD = 3  # Soft fg pixel
 neighbors = [(1, 0), (-1, 0), (0, 1), (0, -1), (-1, 1), (-1, -1), (1, -1), (1, 1)]
 beta = 0
-gamma, lamda = 15, 5 * 9
+gamma, lamda = 10, 5 * 9
 
 
 # Utility function to visualize data
@@ -29,28 +29,51 @@ def visualize_data(data, title):
 
 
 def getNeighborsEdges(img):
-    def vid(i, j):  # vertex ID
-        return (img.shape[1] * i) + j
+    rows, cols = img.shape[:2]
+    vid = lambda i, j: i * cols + j
 
-    def compute_V(i, j, oi, oj):
-        diff = img[i, j] - img[oi, oj]
-        return gamma * np.exp(- beta * diff.dot(diff))
+    # Define neighbor offsets for all 8 directions
+    neighbor_offsets = np.array([
+        [0, 1],  # Right
+        [1, 0],  # Down
+        [0, -1],  # Left
+        [-1, 0],  # Up
+        [1, 1],  # Down-right
+        [1, -1],  # Down-left
+        [-1, -1],  # Up-left
+        [-1, 1]  # Up-right
+    ])
 
-    def add_neighbors(row, col, E, W):
-        for k, l in neighbors:
-            o_i = row + k
-            o_j = col + l
-            if 0 <= o_i < img.shape[0] and 0 <= o_j < img.shape[1]:
-                E.append((vid(i, j), vid(o_i, o_j)))
-                W.append(compute_V(i, j, o_i, o_j))
+    # Compute vertex IDs
+    indices = np.indices((rows, cols)).reshape(2, -1)
 
+    # Prepare empty lists for edges and weights
     edges = []
     weights = []
 
-    for i in range(img.shape[0]):
-        for j in range(img.shape[1]):
-            # add edges to neighbours
-            add_neighbors(i, j, edges, weights)
+    # Pre-compute squared differences for efficiency
+    def compute_V(i, j, oi, oj):
+        diff = img[i, j] - img[oi, oj]
+        return gamma * np.exp(-beta * np.dot(diff, diff))
+
+    for offset in neighbor_offsets:
+        neighbor_indices = indices + offset[:, None]
+        valid_mask = (
+            (neighbor_indices[0] >= 0) & (neighbor_indices[0] < rows) &
+            (neighbor_indices[1] >= 0) & (neighbor_indices[1] < cols)
+        )
+        valid_neighbors = neighbor_indices[:, valid_mask]
+        valid_vertices = indices[:, valid_mask]
+
+        # Compute edges
+        from_vids = vid(valid_vertices[0], valid_vertices[1])
+        to_vids = vid(valid_neighbors[0], valid_neighbors[1])
+        edges.extend(zip(from_vids, to_vids))
+
+        # Compute weights
+        for v, nv in zip(valid_vertices.T, valid_neighbors.T):
+            weights.append(compute_V(v[0], v[1], nv[0], nv[1]))
+
     return edges, weights
 
 
@@ -71,11 +94,12 @@ def grabcut(img, rect, n_iter=5):
     #Initalize the inner square to Foreground
     mask[y:y + h, x:x + w] = GC_PR_FGD
     mask[rect[1] + rect[3] // 2, rect[0] + rect[2] // 2] = GC_FGD
+    visualize_mask(mask, "start")
 
     bgGMM, fgGMM = initalize_GMMs(img, mask)
     beta = get_beta(img)
     size_of_fg = img[mask == GC_PR_FGD].reshape((-1, img.shape[-1])).shape[0]
-    num_iters = 15
+    num_iters = 30
     n_e, n_w = getNeighborsEdges(img)
 
     for i in range(num_iters):
@@ -83,16 +107,17 @@ def grabcut(img, rect, n_iter=5):
         start_time_iter = time.perf_counter()
 
         print("iter {}".format(i))
-
+        start_time_func1 = time.perf_counter()
         bgGMM, fgGMM = update_GMMs(img, mask, bgGMM, fgGMM)
+        end_time_func = time.perf_counter()
+        elapsed_time_func1 = end_time_func - start_time_func1
+        #print(f"Elapsed time of update GMM: {elapsed_time_func1} seconds")
 
+        start_time_func1 = time.perf_counter()
         mincut_sets, energy = calculate_mincut(img, mask, bgGMM, fgGMM, n_e, n_w)
-
-        # Visualize the likelihoods or energy maps (example)
-        #fg_likelihoods = fgGMM.score_samples(img.reshape((-1, 3))).reshape(img.shape[:2])
-        #bg_likelihoods = bgGMM.score_samples(img.reshape((-1, 3))).reshape(img.shape[:2])
-        #visualize_data(fg_likelihoods, f'Foreground Likelihoods at Iteration {i}')
-        #visualize_data(bg_likelihoods, f'Background Likelihoods at Iteration {i}')
+        end_time_func = time.perf_counter()
+        elapsed_time_func1 = end_time_func - start_time_func1
+        #print(f"Elapsed time of mincut : {elapsed_time_func1} seconds")
 
         mask = update_mask(mincut_sets, mask)
 
@@ -101,14 +126,17 @@ def grabcut(img, rect, n_iter=5):
         visualize_mask(mask, i)
 
         if check_convergence(abs(temp_size - size_of_fg)):
-            if k > 2:
-                break
             k += 1
+            if k > 1:
+                break
 
         size_of_fg = temp_size
         end_time_iter = time.perf_counter()
         elapsed_time_iter = end_time_iter - start_time_iter
         print(f"Elapsed time: {elapsed_time_iter} seconds")
+
+        if end_time_iter - start_time > 175:
+            break
 
     # Return the final mask and the GMMs
     end_time = time.perf_counter()
@@ -121,13 +149,13 @@ def grabcut(img, rect, n_iter=5):
 # question 2.1 - Amir - Should be OK
 def initalize_GMMs(img, mask, n_components=5):
     bg_pixels = img[mask == GC_BGD].reshape((-1, img.shape[-1]))
-    fg_pr_pixels = img[mask == GC_PR_FGD].reshape((-1, img.shape[-1]))
+    fg_pr_pixels = img[(mask == GC_PR_FGD) | (mask == GC_FGD)].reshape((-1, img.shape[-1]))
 
     # Adjust the number of components based on available pixels
     actual_components = min(n_components, len(fg_pr_pixels))
 
-    bgGMM = GaussianMixture(n_components)
-    fgGMM = GaussianMixture(actual_components)
+    bgGMM = GaussianMixture(n_components, covariance_type='full')
+    fgGMM = GaussianMixture(actual_components, covariance_type='full')
 
     bgGMM.fit(bg_pixels)
     if len(fg_pr_pixels) >= actual_components:
@@ -143,16 +171,15 @@ def initalize_GMMs(img, mask, n_components=5):
 # Define helper functions for the GrabCut algorithm
 # question 2.2 - Amir - Should be OK
 def update_GMMs(img, mask, bgGMM, fgGMM):
-    bg_pixels = img[mask == GC_BGD].reshape((-1, img.shape[-1]))
-    fg_pr_pixels = img[(mask == GC_PR_FGD) | (mask == GC_FGD)].reshape((-1, img.shape[-1]))
+    bg_pixels = img[mask == GC_BGD]
+    fg_pr_pixels = img[(mask == GC_PR_FGD) | (mask == GC_FGD)]
 
-    print(img[mask == GC_BGD].reshape((-1, img.shape[-1])).shape,
-          img[mask == GC_PR_BGD].reshape((-1, img.shape[-1])).shape)
-    print(img[mask == GC_FGD].reshape((-1, img.shape[-1])).shape,
-          img[mask == GC_PR_FGD].reshape((-1, img.shape[-1])).shape)
+    bg_pixels = bg_pixels.reshape(-1, img.shape[-1])
+    fg_pr_pixels = fg_pr_pixels.reshape(-1, img.shape[-1])
 
     bgGMM.fit(bg_pixels)
-    if len(fg_pr_pixels) >= 5:
+
+    if fg_pr_pixels.shape[0] >= 4:
         fgGMM.fit(fg_pr_pixels)
     else:
         print("Not enough foreground pixels to update the foreground GMM.")
@@ -160,54 +187,21 @@ def update_GMMs(img, mask, bgGMM, fgGMM):
     return bgGMM, fgGMM
 
 
-##def get_beta(img):
-##    rows, cols, channels = img.shape
-##    beta = 0
-##
-##    # Calculate squared differences between neighboring pixels for all channels
-##    if img.ndim == 3:  # For color images
-##        for c in range(channels):
-##            left_diff = (img[1:, :, c] - img[:-1, :, c]) ** 2
-##            right_diff = (img[:, 1:, c] - img[:, :-1, c]) ** 2
-##            down_diff = (img[1:, 1:, c] - img[:-1, :-1, c]) ** 2
-##            up_diff = (img[:-1, 1:, c] - img[1:, :-1, c]) ** 2
-##
-##            beta += np.sum(left_diff) + np.sum(right_diff) + np.sum(down_diff) + np.sum(up_diff)
-##    else:  # For grayscale images
-##        left_diff = (img[1:, :] - img[:-1, :]) ** 2
-##        right_diff = (img[:, 1:] - img[:, :-1]) ** 2
-##        down_diff = (img[1:, 1:] - img[:-1, :-1]) ** 2
-##        up_diff = (img[:-1, 1:] - img[1:, :-1]) ** 2
-##
-##        beta = np.sum(left_diff) + np.sum(right_diff) + np.sum(down_diff) + np.sum(up_diff)
-##
-##    # Normalize by the number of pixel differences considered
-##    total_pixels = (rows - 1) * cols + (cols - 1) * rows + (rows - 1) * (cols - 1) * 2
-##    beta = 1 / (2 * beta / total_pixels)
-##
-##    return beta
-
-
 # Helper function to get beta (smoothness)
 def get_beta(img):
     rows, cols, _ = img.shape
-    _left_diff = img[:, 1:] - img[:, :-1]
-    _upleft_diff = img[1:, 1:] - img[:-1, :-1]
-    _up_diff = img[1:, :] - img[:-1, :]
-    _upright_diff = img[1:, :-1] - img[:-1, 1:]
-
-    beta = np.sum(np.square(_left_diff)) + np.sum(np.square(_upleft_diff)) + \
-           np.sum(np.square(_up_diff)) + \
-           np.sum(np.square(_upright_diff))
-    beta = 1 / (2 * beta / (4 * cols * rows - 3 * cols - 3 * rows + 2))
-    print(beta)
+    diff_squares = (np.square(img[:, 1:] - img[:, :-1]).sum() +
+                    np.square(img[1:, 1:] - img[:-1, :-1]).sum() +
+                    np.square(img[1:, :] - img[:-1, :]).sum() +
+                    np.square(img[1:, :-1] - img[:-1, 1:]).sum())
+    beta = 1 / (2 * diff_squares / (4 * cols * rows - 3 * cols - 3 * rows + 2))
+    print("beta = ", beta)
     return beta
 
 
 # question 2.3 - Amir - May need changes
 def calculate_mincut(img, mask, bgGMM, fgGMM, n_edges, n_weights):
     # TODO: implement energy (cost) calculation step and mincut
-    min_cut = [[], []]
 
     fg_D = - fgGMM.score_samples(img.reshape((-1, img.shape[-1]))).reshape(img.shape[:-1])
     bg_D = - bgGMM.score_samples(img.reshape((-1, img.shape[-1]))).reshape(img.shape[:-1])
@@ -220,7 +214,7 @@ def calculate_mincut(img, mask, bgGMM, fgGMM, n_edges, n_weights):
     def vid(i, j):  # vertex ID
         return (img.shape[1] * i) + j
 
-    # BUILD GRAPH
+    # graph
     num_pix = img.shape[0] * img.shape[1]
     graph = ig.Graph(directed=False)
     graph.add_vertices(num_pix + 2)
@@ -231,26 +225,48 @@ def calculate_mincut(img, mask, bgGMM, fgGMM, n_edges, n_weights):
     edges = []
     weights = []
 
-    for i in range(img.shape[0]):
-        for j in range(img.shape[1]):
-            if mask[i, j] == GC_BGD:
-                edges.append((vid(i, j), T))
-                weights.append(np.inf)
-            elif mask[i, j] == GC_FGD:
-                edges.append((vid(i, j), S))
-                weights.append(np.inf)
-            else:
-                edges.append((vid(i, j), S))
-                weights.append(bg_D[i, j])
+    # Vectorized approach to get all indices
+    indices = np.indices((img.shape[0], img.shape[1]))
+    i_indices = indices[0].flatten()
+    j_indices = indices[1].flatten()
 
-                edges.append((vid(i, j), T))
-                weights.append(fg_D[i, j])
+    # Flattened mask
+    flat_mask = mask.flatten()
 
+    # Process background and foreground
+    bg_indices = np.where(flat_mask == GC_BGD)
+    fg_indices = np.where(flat_mask == GC_FGD)
+    other_indices = np.where((flat_mask != GC_BGD) & (flat_mask != GC_FGD))
+
+    # Append edges and weights for background
+    bg_vid = [vid(i, j) for i, j in zip(i_indices[bg_indices], j_indices[bg_indices])]
+    edges.extend([(v, T) for v in bg_vid])
+    weights.extend([np.inf] * len(bg_vid))
+
+    # Append edges and weights for foreground
+    fg_vid = [vid(i, j) for i, j in zip(i_indices[fg_indices], j_indices[fg_indices])]
+    edges.extend([(v, S) for v in fg_vid])
+    weights.extend([np.inf] * len(fg_vid))
+
+    # Append edges and weights for other cases
+    other_vid = [vid(i, j) for i, j in zip(i_indices[other_indices], j_indices[other_indices])]
+    other_bg_D = bg_D.flatten()[other_indices]
+    other_fg_D = fg_D.flatten()[other_indices]
+
+    edges.extend([(v, S) for v in other_vid])
+    weights.extend(other_bg_D.tolist())
+
+    edges.extend([(v, T) for v in other_vid])
+    weights.extend(other_fg_D.tolist())
+
+    # Extend with n_edges and n_weights
     edges.extend(n_edges)
     weights.extend(n_weights)
 
+    # Add edges to the graph
     graph.add_edges(edges, attributes={'weight': weights})
 
+    # Compute the mincut
     cut = graph.st_mincut(S, T, capacity='weight')
 
     return cut, cut.value
@@ -258,7 +274,6 @@ def calculate_mincut(img, mask, bgGMM, fgGMM, n_edges, n_weights):
 
 # question 2.4 - Aviv
 def update_mask(mincut_sets, mask):
-    # TODO: implement mask update step
     def ind(idx):  # image index
         return ((idx // img.shape[1]), (idx % img.shape[1]))
 
@@ -284,8 +299,8 @@ def update_mask(mincut_sets, mask):
 
 # question 2.5 - Amir - Done
 def check_convergence(energy):
-    print(energy)
-    return energy < 25
+    print(f"Total energy: {energy}")
+    return energy < 10
 
 
 # question 2.6 - Amir - Done
@@ -305,9 +320,10 @@ def visualize_mask(mask, iteration):
     plt.show()
 
 
+
 def parse():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--input_name', type=str, default='stone2', help='name of image from the course files')
+    parser.add_argument('--input_name', type=str, default='teddy', help='name of image from the course files')
     parser.add_argument('--eval', type=int, default=1, help='calculate the metrics')
     parser.add_argument('--input_img_path', type=str, default='', help='if you wish to use your own img_path')
     parser.add_argument('--use_file_rect', type=int, default=1, help='Read rect from course files')
