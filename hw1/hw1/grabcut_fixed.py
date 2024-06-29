@@ -13,7 +13,7 @@ GC_PR_BGD = 2  # Soft bg pixel
 GC_PR_FGD = 3  # Soft fg pixel
 neighbors = [(1, 0), (-1, 0), (0, 1), (0, -1), (-1, 1), (-1, -1), (1, -1), (1, 1)]
 beta = 0
-gamma, lamda = 10, 5 * 9
+gamma, lamda = 5, 5 * 9
 
 
 # Utility function to visualize data
@@ -147,7 +147,7 @@ def grabcut(img, rect, n_iter=5):
 
 
 # question 2.1 - Amir - Should be OK
-def initalize_GMMs(img, mask, n_components=5):
+def initalize_GMMs(img, mask, n_components=2):
     bg_pixels = img[mask == GC_BGD].reshape((-1, img.shape[-1]))
     fg_pr_pixels = img[(mask == GC_PR_FGD) | (mask == GC_FGD)].reshape((-1, img.shape[-1]))
 
@@ -323,7 +323,7 @@ def visualize_mask(mask, iteration):
 
 def parse():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--input_name', type=str, default='teddy', help='name of image from the course files')
+    parser.add_argument('--input_name', type=str, default='book', help='name of image from the course files')
     parser.add_argument('--eval', type=int, default=1, help='calculate the metrics')
     parser.add_argument('--input_img_path', type=str, default='', help='if you wish to use your own img_path')
     parser.add_argument('--use_file_rect', type=int, default=1, help='Read rect from course files')
