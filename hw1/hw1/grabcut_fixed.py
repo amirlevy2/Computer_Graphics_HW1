@@ -13,7 +13,7 @@ GC_PR_BGD = 2  # Soft bg pixel
 GC_PR_FGD = 3  # Soft fg pixel
 neighbors = [(1, 0), (-1, 0), (0, 1), (0, -1), (-1, 1), (-1, -1), (1, -1), (1, 1)]
 beta = 0
-gamma, lamda = 5, 5 * 9
+gamma, lamda = 10, 5 * 9
 
 
 # Utility function to visualize data
@@ -59,8 +59,8 @@ def getNeighborsEdges(img):
     for offset in neighbor_offsets:
         neighbor_indices = indices + offset[:, None]
         valid_mask = (
-            (neighbor_indices[0] >= 0) & (neighbor_indices[0] < rows) &
-            (neighbor_indices[1] >= 0) & (neighbor_indices[1] < cols)
+                (neighbor_indices[0] >= 0) & (neighbor_indices[0] < rows) &
+                (neighbor_indices[1] >= 0) & (neighbor_indices[1] < cols)
         )
         valid_neighbors = neighbor_indices[:, valid_mask]
         valid_vertices = indices[:, valid_mask]
@@ -121,7 +121,7 @@ def grabcut(img, rect, n_iter=5):
 
         temp_size = img[mask == GC_PR_FGD].reshape((-1, img.shape[-1])).shape[0]
 
-        #visualize_mask(mask, i)
+        visualize_mask(mask, i)
 
         if check_convergence(abs(temp_size - size_of_fg)):
             k += 1
@@ -144,9 +144,8 @@ def grabcut(img, rect, n_iter=5):
     return mask, bgGMM, fgGMM
 
 
-
 # question 2.1
-def initialize_GMMs(img, mask, n_components=5):
+def initialize_GMMs(img, mask, n_components=2):
     bg_pixels = img[mask == GC_BGD].reshape((-1, img.shape[-1]))
     fg_pr_pixels = img[(mask == GC_PR_FGD) | (mask == GC_FGD)].reshape((-1, img.shape[-1]))
 
@@ -184,7 +183,6 @@ def initialize_GMMs(img, mask, n_components=5):
     return bgGMM, fgGMM
 
 
-
 # Define helper functions for the GrabCut algorithm
 # question 2.2
 def update_GMMs(img, mask, bgGMM, fgGMM):
@@ -201,7 +199,7 @@ def update_GMMs(img, mask, bgGMM, fgGMM):
         covariances = gmm.covariances_
         n_components = gmm.n_components
         n_samples, n_features = data.shape
-        
+
         responsibilities = np.zeros((n_samples, n_components))
 
         for k in range(n_components):
@@ -212,7 +210,7 @@ def update_GMMs(img, mask, bgGMM, fgGMM):
                 exponent = np.inf
             coef = 1 / np.sqrt((2 * np.pi) ** n_features * np.linalg.det(covariances[k]))
             responsibilities[:, k] = weights[k] * coef * np.exp(-0.5 * exponent)
-        
+
         sum_responsibilities = responsibilities.sum(axis=1, keepdims=True)
         sum_responsibilities[sum_responsibilities == 0] = 1  # Avoid division by zero
         responsibilities /= sum_responsibilities
@@ -245,7 +243,6 @@ def update_GMMs(img, mask, bgGMM, fgGMM):
         fgGMM.precisions_cholesky_ = np.linalg.cholesky(np.linalg.inv(fg_covariances))
 
     return bgGMM, fgGMM
-
 
 
 # Helper function to get beta (smoothness)
@@ -381,10 +378,9 @@ def visualize_mask(mask, iteration):
     plt.show()
 
 
-
 def parse():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--input_name', type=str, default='flower', help='name of image from the course files')
+    parser.add_argument('--input_name', type=str, default='grave', help='name of image from the course files')
     parser.add_argument('--eval', type=int, default=1, help='calculate the metrics')
     parser.add_argument('--input_img_path', type=str, default='', help='if you wish to use your own img_path')
     parser.add_argument('--use_file_rect', type=int, default=1, help='Read rect from course files')

@@ -13,7 +13,7 @@ GC_PR_BGD = 2  # Soft bg pixel
 GC_PR_FGD = 3  # Soft fg pixel
 neighbors = [(1, 0), (-1, 0), (0, 1), (0, -1), (-1, 1), (-1, -1), (1, -1), (1, 1)]
 beta = 0
-gamma, lamda = 19, 5 * 9
+gamma, lamda = 10, 5 * 9
 
 
 # Utility function to visualize data
@@ -59,8 +59,8 @@ def getNeighborsEdges(img):
     for offset in neighbor_offsets:
         neighbor_indices = indices + offset[:, None]
         valid_mask = (
-            (neighbor_indices[0] >= 0) & (neighbor_indices[0] < rows) &
-            (neighbor_indices[1] >= 0) & (neighbor_indices[1] < cols)
+                (neighbor_indices[0] >= 0) & (neighbor_indices[0] < rows) &
+                (neighbor_indices[1] >= 0) & (neighbor_indices[1] < cols)
         )
         valid_neighbors = neighbor_indices[:, valid_mask]
         valid_vertices = indices[:, valid_mask]
@@ -94,9 +94,9 @@ def grabcut(img, rect, n_iter=5):
     #Initalize the inner square to Foreground
     mask[y:y + h, x:x + w] = GC_PR_FGD
     mask[rect[1] + rect[3] // 2, rect[0] + rect[2] // 2] = GC_FGD
-    visualize_mask(mask, "start")
+    #visualize_mask(mask, "start")
 
-    bgGMM, fgGMM = initalize_GMMs(img, mask)
+    bgGMM, fgGMM = initialize_GMMs(img, mask)  # Corrected function call
     beta = get_beta(img)
     size_of_fg = img[mask == GC_PR_FGD].reshape((-1, img.shape[-1])).shape[0]
     num_iters = 30
@@ -106,34 +106,31 @@ def grabcut(img, rect, n_iter=5):
         #Update GMM
         start_time_iter = time.perf_counter()
 
-        print("iter {}".format(i))
+        #print("iter {}".format(i))
         start_time_func1 = time.perf_counter()
         bgGMM, fgGMM = update_GMMs(img, mask, bgGMM, fgGMM)
         end_time_func = time.perf_counter()
         elapsed_time_func1 = end_time_func - start_time_func1
-        #print(f"Elapsed time of update GMM: {elapsed_time_func1} seconds")
 
         start_time_func1 = time.perf_counter()
         mincut_sets, energy = calculate_mincut(img, mask, bgGMM, fgGMM, n_e, n_w)
         end_time_func = time.perf_counter()
         elapsed_time_func1 = end_time_func - start_time_func1
-        #print(f"Elapsed time of mincut : {elapsed_time_func1} seconds")
 
         mask = update_mask(mincut_sets, mask)
 
         temp_size = img[mask == GC_PR_FGD].reshape((-1, img.shape[-1])).shape[0]
 
-        visualize_mask(mask, i)
-
         if check_convergence(abs(temp_size - size_of_fg)):
             k += 1
             if k > 1:
+                visualize_mask(mask, i)
                 break
 
         size_of_fg = temp_size
         end_time_iter = time.perf_counter()
         elapsed_time_iter = end_time_iter - start_time_iter
-        print(f"Elapsed time: {elapsed_time_iter} seconds")
+        #print(f"Elapsed time: {elapsed_time_iter} seconds")
 
         if end_time_iter - start_time > 175:
             break
@@ -146,30 +143,47 @@ def grabcut(img, rect, n_iter=5):
     return mask, bgGMM, fgGMM
 
 
-# question 2.1 - Amir - Should be OK
-def initalize_GMMs(img, mask, n_components=5):
+# question 2.1
+def initialize_GMMs(img, mask, n_components=2):
     bg_pixels = img[mask == GC_BGD].reshape((-1, img.shape[-1]))
     fg_pr_pixels = img[(mask == GC_PR_FGD) | (mask == GC_FGD)].reshape((-1, img.shape[-1]))
 
     # Adjust the number of components based on available pixels
     actual_components = min(n_components, len(fg_pr_pixels))
 
-    bgGMM = GaussianMixture(n_components, covariance_type='full')
-    fgGMM = GaussianMixture(actual_components, covariance_type='full')
+    def initialize_params(data, n_components):
+        np.random.seed(0)
+        n_samples, n_features = data.shape
+        weights = np.ones(n_components) / n_components
+        means = data[np.random.choice(n_samples, n_components, replace=False)]
+        covariances = np.array([np.cov(data, rowvar=False) + 1e-6 * np.eye(n_features) for _ in range(n_components)])
+        return weights, means, covariances
 
-    bgGMM.fit(bg_pixels)
+    # Initialize parameters for bgGMM
+    bg_weights, bg_means, bg_covariances = initialize_params(bg_pixels, n_components)
+    bgGMM = GaussianMixture(n_components, covariance_type='full')
+    bgGMM.weights_ = bg_weights
+    bgGMM.means_ = bg_means
+    bgGMM.covariances_ = bg_covariances
+    bgGMM.precisions_cholesky_ = np.linalg.cholesky(np.linalg.inv(bg_covariances))
+
+    # Initialize parameters for fgGMM
     if len(fg_pr_pixels) >= actual_components:
-        fgGMM.fit(fg_pr_pixels)
+        fg_weights, fg_means, fg_covariances = initialize_params(fg_pr_pixels, actual_components)
+        fgGMM = GaussianMixture(actual_components, covariance_type='full')
+        fgGMM.weights_ = fg_weights
+        fgGMM.means_ = fg_means
+        fgGMM.covariances_ = fg_covariances
+        fgGMM.precisions_cholesky_ = np.linalg.cholesky(np.linalg.inv(fg_covariances))
     else:
         print("Not enough foreground pixels to initialize the foreground GMM.")
-        # Optionally adjust the mask here to increase foreground pixels
-        # Example: Expand the foreground area slightly
+        fgGMM = GaussianMixture(actual_components, covariance_type='full')
 
     return bgGMM, fgGMM
 
 
 # Define helper functions for the GrabCut algorithm
-# question 2.2 - Amir - Should be OK
+# question 2.2
 def update_GMMs(img, mask, bgGMM, fgGMM):
     bg_pixels = img[mask == GC_BGD]
     fg_pr_pixels = img[(mask == GC_PR_FGD) | (mask == GC_FGD)]
@@ -177,12 +191,55 @@ def update_GMMs(img, mask, bgGMM, fgGMM):
     bg_pixels = bg_pixels.reshape(-1, img.shape[-1])
     fg_pr_pixels = fg_pr_pixels.reshape(-1, img.shape[-1])
 
-    bgGMM.fit(bg_pixels)
+    def em_step(data, gmm):
+        # E-step: compute responsibilities
+        weights = gmm.weights_
+        means = gmm.means_
+        covariances = gmm.covariances_
+        n_components = gmm.n_components
+        n_samples, n_features = data.shape
 
-    if fg_pr_pixels.shape[0] >= 4:
-        fgGMM.fit(fg_pr_pixels)
-    else:
-        print("Not enough foreground pixels to update the foreground GMM.")
+        responsibilities = np.zeros((n_samples, n_components))
+
+        for k in range(n_components):
+            diff = data - means[k]
+            try:
+                exponent = np.einsum('ij,ij->i', diff @ np.linalg.inv(covariances[k]), diff)
+            except np.linalg.LinAlgError:
+                exponent = np.inf
+            coef = 1 / np.sqrt((2 * np.pi) ** n_features * np.linalg.det(covariances[k]))
+            responsibilities[:, k] = weights[k] * coef * np.exp(-0.5 * exponent)
+
+        sum_responsibilities = responsibilities.sum(axis=1, keepdims=True)
+        sum_responsibilities[sum_responsibilities == 0] = 1  # Avoid division by zero
+        responsibilities /= sum_responsibilities
+
+        # M-step: update parameters
+        weights = responsibilities.sum(axis=0) / n_samples
+        means = (responsibilities.T @ data) / responsibilities.sum(axis=0)[:, np.newaxis]
+
+        covariances = np.zeros((n_components, n_features, n_features))
+        for k in range(n_components):
+            diff = data - means[k]
+            covariances[k] = (responsibilities[:, k][:, np.newaxis] * diff).T @ diff / responsibilities[:, k].sum()
+            covariances[k].flat[::n_features + 1] += 1e-6  # Add a tiny value to the diagonal for numerical stability
+
+        return weights, means, covariances
+
+    # Update GMMs using EM algorithm
+    if len(bg_pixels) > 0:
+        bg_weights, bg_means, bg_covariances = em_step(bg_pixels, bgGMM)
+        bgGMM.weights_ = bg_weights
+        bgGMM.means_ = bg_means
+        bgGMM.covariances_ = bg_covariances
+        bgGMM.precisions_cholesky_ = np.linalg.cholesky(np.linalg.inv(bg_covariances))
+
+    if len(fg_pr_pixels) > 0:
+        fg_weights, fg_means, fg_covariances = em_step(fg_pr_pixels, fgGMM)
+        fgGMM.weights_ = fg_weights
+        fgGMM.means_ = fg_means
+        fgGMM.covariances_ = fg_covariances
+        fgGMM.precisions_cholesky_ = np.linalg.cholesky(np.linalg.inv(fg_covariances))
 
     return bgGMM, fgGMM
 
@@ -195,11 +252,11 @@ def get_beta(img):
                     np.square(img[1:, :] - img[:-1, :]).sum() +
                     np.square(img[1:, :-1] - img[:-1, 1:]).sum())
     beta = 1 / (2 * diff_squares / (4 * cols * rows - 3 * cols - 3 * rows + 2))
-    print("beta = ", beta)
+    #print("beta = ", beta)
     return beta
 
 
-# question 2.3 - Amir - May need changes
+# question 2.3
 def calculate_mincut(img, mask, bgGMM, fgGMM, n_edges, n_weights):
     # TODO: implement energy (cost) calculation step and mincut
 
@@ -272,7 +329,7 @@ def calculate_mincut(img, mask, bgGMM, fgGMM, n_edges, n_weights):
     return cut, cut.value
 
 
-# question 2.4 - Aviv
+# question 2.4
 def update_mask(mincut_sets, mask):
     def ind(idx):  # image index
         return ((idx // img.shape[1]), (idx % img.shape[1]))
@@ -297,13 +354,13 @@ def update_mask(mincut_sets, mask):
     return new_mask
 
 
-# question 2.5 - Amir - Done
+# question 2.5
 def check_convergence(energy):
-    print(f"Total energy: {energy}")
+    #print(f"Total energy: {energy}")
     return energy < 10
 
 
-# question 2.6 - Amir - Done
+# question 2.6
 def cal_metric(predicted_mask, gt_mask):
     intersection = np.logical_and(predicted_mask, gt_mask)
     union = np.logical_or(predicted_mask, gt_mask)
@@ -320,7 +377,6 @@ def visualize_mask(mask, iteration):
     plt.show()
 
 
-
 def parse(picture):
     parser = argparse.ArgumentParser()
     parser.add_argument('--input_name', type=str, default=picture, help='name of image from the course files')
@@ -333,7 +389,8 @@ def parse(picture):
 
 if __name__ == '__main__':
     # Load an example image and define a bounding box around the object of interest
-    file_names = ["flower", "fullmoon", "grave","llama", "memorial", "sheep", "stone2", "teddy"]
+    file_names = ["banana1", "banana2", "book", "bush", "cross", "flower", "fullmoon", "grave", "llama", "memorial",
+                  "sheep", "stone2", "teddy"]
     for file_name in file_names:
         try:
             print(file_name)
@@ -371,4 +428,3 @@ if __name__ == '__main__':
             cv2.destroyAllWindows()
         except Exception as e:
             print(e)
-
