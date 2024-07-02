@@ -1,69 +1,62 @@
 import cv2
 import numpy as np
+import matplotlib.pyplot as plt
 import scipy.sparse
 from scipy.sparse.linalg import spsolve
 import argparse
 
 def poisson_blend(im_src, im_tgt, im_mask, center):
-    h_src, w_src = im_src.shape[:2]
-    h_tgt, w_tgt = im_tgt.shape[:2]
+    x, y = center
+    h, w = im_mask.shape
 
-    # Calculate offsets correctly
-    y_offset = center[1] - h_src // 2
-    x_offset = center[0] - w_src // 2
+    # Compute the region of interest in the target image
+    y1, y2 = y - h // 2, y + h // 2
+    x1, x2 = x - w // 2, x + w // 2
 
-    y_offset = max(0, min(y_offset, h_tgt - h_src))
-    x_offset = max(0, min(x_offset, w_tgt - w_src))
+    if y1 < 0 or y2 > im_tgt.shape[0] or x1 < 0 or x2 > im_tgt.shape[1]:
+        raise ValueError("The source image is too large to fit in the target image at the specified offset")
 
-    # print(f"y_offset: {y_offset}, x_offset: {x_offset}")
-    # print(f"ROI size in target image: ({y_offset}, {y_offset + h_src}), ({x_offset}, {x_offset + w_src})")
+    im_tgt_crop = im_tgt[y1:y2, x1:x2]
 
-    # Extract the region of interest from the target image
-    tgt_roi = im_tgt[y_offset:y_offset + h_src, x_offset:x_offset + w_src].copy()
+    if im_tgt_crop.shape[:2] != im_src.shape[:2]:
+        raise ValueError("The cropped target image must have the same dimensions as the source image")
 
-    # Construct Laplacian matrix and b vector
-    mask_indices = np.where(im_mask > 0)
-    num_pixels = mask_indices[0].shape[0]
+    # Create the Laplacian operator
+    laplacian = np.array([[0, 1, 0],
+                          [1, -4, 1],
+                          [0, 1, 0]])
 
-    # print(f"Number of masked pixels: {num_pixels}")
+    # Compute the gradient of the source image
+    gradient = cv2.filter2D(im_src, cv2.CV_64F, laplacian)
 
-    A = scipy.sparse.lil_matrix((num_pixels, num_pixels))
-    b = np.zeros((num_pixels, im_src.shape[2]))
+    # Initialize the blended region with the target region
+    blended = im_tgt_crop.astype(np.float64)
 
-    for i, (y, x) in enumerate(zip(mask_indices[0], mask_indices[1])):
-        A[i, i] = 4
-        for dy, dx in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
-            yy, xx = y + dy, x + dx
-            if 0 <= yy < im_mask.shape[0] and 0 <= xx < im_mask.shape[1]:
-                if im_mask[yy, xx] > 0:
-                    j = np.where((mask_indices[0] == yy) & (mask_indices[1] == xx))[0][0]
-                    A[i, j] = -1
-                else:
-                    b[i] += tgt_roi[yy - y_offset, xx - x_offset]
+    # Iteratively solve the Poisson equation using the Jacobi method
+    for _ in range(2000):
+        blended[1:-1, 1:-1] = (blended[:-2, 1:-1] + blended[2:, 1:-1] +
+                               blended[1:-1, :-2] + blended[1:-1, 2:] -
+                               gradient[1:-1, 1:-1]) / 4.0
+        blended[im_mask == 0] = im_tgt_crop[im_mask == 0]
 
-    blended = tgt_roi.copy()
-    for channel in range(im_src.shape[2]):
-        f = im_src[mask_indices[0], mask_indices[1], channel]
-        # print(f"Solving Poisson equation for channel {channel}")
-        try:
-            f_prime = spsolve(A.tocsc(), f - b[:, channel])
-        except RuntimeError as e:
-            # print(f"Runtime error during spsolve for channel {channel}: {e}")
-            continue
-        blended[mask_indices[0], mask_indices[1], channel] = np.clip(f_prime, 0, 255)
+    # Convert the blended region back to the original image format
+    blended = blended.clip(0, 255).astype(im_tgt.dtype)
 
-    im_tgt[y_offset:y_offset + h_src, x_offset:x_offset + w_src] = blended
+    # Replace the region in the target image with the blended region
+    result = im_tgt.copy()
+    result[y1:y2, x1:x2] = blended
 
-    return im_tgt
+    return result
 
 def parse():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--src_path', type=str, default='./data/imgs/banana2.jpg', help='image file path')
+    parser.add_argument('--src_path', type=str, default='./data/imgs/banana1.jpg', help='image file path')
     parser.add_argument('--mask_path', type=str, default='./data/seg_GT/banana1.bmp', help='mask file path')
     parser.add_argument('--tgt_path', type=str, default='./data/bg/table.jpg', help='mask file path')
     return parser.parse_args()
 
 if __name__ == "__main__":
+    # Load the source and target images
     args = parse()
 
     im_tgt = cv2.imread(args.tgt_path, cv2.IMREAD_COLOR)
@@ -74,13 +67,16 @@ if __name__ == "__main__":
         im_mask = cv2.imread(args.mask_path, cv2.IMREAD_GRAYSCALE)
         im_mask = cv2.threshold(im_mask, 0, 255, cv2.THRESH_BINARY)[1]
 
-    # print(f"Source image shape: {im_src.shape}")
-    # print(f"Target image shape: {im_tgt.shape}")
-    # print(f"Mask shape: {im_mask.shape}")
+    # Ensure that the mask and source image have the same dimensions
+    if im_mask.shape[:2] != im_src.shape[:2]:
+        raise ValueError("The mask and source image must have the same dimensions")
 
     center = (int(im_tgt.shape[1] / 2), int(im_tgt.shape[0] / 2))
 
     im_clone = poisson_blend(im_src, im_tgt, im_mask, center)
 
+    cv2.imshow('Cloned image', im_clone)
     cv2.imwrite('blended_output_refined.png', im_clone)
-    # print('Blended image saved as blended_output_refined.png')
+    print('Blended image saved as blended_output_refined.png')
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()
