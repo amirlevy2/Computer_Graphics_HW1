@@ -146,7 +146,7 @@ def grabcut(img, rect, n_iter=5):
 
 
 # question 2.1
-def initialize_GMMs(img, mask, n_components=2):
+def initialize_GMMs(img, mask, n_components=5):
     bg_pixels = img[mask == GC_BGD].reshape((-1, img.shape[-1]))
     fg_pr_pixels = img[(mask == GC_PR_FGD) | (mask == GC_FGD)].reshape((-1, img.shape[-1]))
 
