@@ -206,11 +206,16 @@ def update_GMMs(img, mask, bgGMM, fgGMM):
 
         for k in range(n_components):
             diff = data - means[k]
-            exponent = np.einsum('ij,ij->i', diff @ np.linalg.inv(covariances[k]), diff)
+            try:
+                exponent = np.einsum('ij,ij->i', diff @ np.linalg.inv(covariances[k]), diff)
+            except np.linalg.LinAlgError:
+                exponent = np.inf
             coef = 1 / np.sqrt((2 * np.pi) ** n_features * np.linalg.det(covariances[k]))
             responsibilities[:, k] = weights[k] * coef * np.exp(-0.5 * exponent)
         
-        responsibilities /= responsibilities.sum(axis=1, keepdims=True)
+        sum_responsibilities = responsibilities.sum(axis=1, keepdims=True)
+        sum_responsibilities[sum_responsibilities == 0] = 1  # Avoid division by zero
+        responsibilities /= sum_responsibilities
 
         # M-step: update parameters
         weights = responsibilities.sum(axis=0) / n_samples
@@ -240,6 +245,7 @@ def update_GMMs(img, mask, bgGMM, fgGMM):
         fgGMM.precisions_cholesky_ = np.linalg.cholesky(np.linalg.inv(fg_covariances))
 
     return bgGMM, fgGMM
+
 
 
 # Helper function to get beta (smoothness)
